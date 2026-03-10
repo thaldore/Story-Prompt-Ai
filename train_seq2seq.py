@@ -1,3 +1,16 @@
+"""
+train_seq2seq.py — Seq2Seq (LSTM) Model Tanımı ve Eğitim Betiği
+================================================================
+LSTM tabanlı encoder-decoder mimarisi kullanarak prompt → hikaye
+eşleştirmesi öğrenen özel bir Seq2Seq modeli tanımlar ve eğitir.
+
+Dışa aktarılan bileşenler (app.py tarafından kullanılır):
+    Tokenizer, Encoder, Decoder, Seq2Seq, generate,
+    DEVICE, EMBEDDING_DIM, HIDDEN_DIM
+
+Kullanım:
+    python train_seq2seq.py
+"""
 import json
 import torch
 import torch.nn as nn
@@ -24,12 +37,18 @@ PAD_token = 2
 # --------------------
 class Tokenizer:
     def __init__(self):
-        self.word2idx = {"<SOS>": SOS_token, "<EOS>": EOS_token, "<PAD>": PAD_token}    #kelimeden idye işleme
-        self.idx2word = {SOS_token: "<SOS>", EOS_token: "<EOS>", PAD_token: "<PAD>"}    #idden kelimeye işleme
+        self.word2idx = {"<SOS>": SOS_token, "<EOS>": EOS_token, "<PAD>": PAD_token}
+        self.idx2word = {SOS_token: "<SOS>", EOS_token: "<EOS>", PAD_token: "<PAD>"}
         self.vocab_count = {}
         self.vocab_size = 3
 
-    def fit_on_texts(self, texts):         #Veri kümesindeki tüm kelimelerden bir kelime hazinesi oluşturur.
+    def fit_on_texts(self, texts):
+        """
+        Veri kümesindeki tüm kelimeleri tarayarak kelime hazinesi oluşturur.
+
+        Args:
+            texts: Kelimelere ayrılacak metin dizelerinin listesi veya yinelenebiliri.
+        """
         for text in texts:
             for word in text.lower().split():
                 if word not in self.word2idx:
@@ -37,12 +56,30 @@ class Tokenizer:
                     self.idx2word[self.vocab_size] = word
                     self.vocab_size += 1
 
-    def text_to_seq(self, text):        #Metni token ID'leri dizisine dönüştürür, SOS_token ve EOS_token ekler.
+    def text_to_seq(self, text):
+        """
+        Metni token ID'leri dizisine dönüştürür; başına SOS, sonuna EOS ekler.
+
+        Args:
+            text (str): Dönüştürülecek giriş metni.
+
+        Returns:
+            list[int]: Başında SOS_token, sonunda EOS_token bulunan token ID listesi.
+        """
         seq = [self.word2idx.get(word, self.word2idx["<PAD>"]) for word in text.lower().split()]
         seq = [SOS_token] + seq + [EOS_token]
         return seq
 
-    def seq_to_text(self, seq):        #Token ID dizisini tekrar metne dönüştürür. 
+    def seq_to_text(self, seq):
+        """
+        Token ID dizisini okunabilir metne geri dönüştürür.
+
+        Args:
+            seq (list[int]): Token ID listesi (SOS/EOS/PAD token'ları atlanır).
+
+        Returns:
+            str: Boşluklarla birleştirilmiş kelimelerden oluşan metin.
+        """
         words = []
         for idx in seq:
             if idx == EOS_token:
@@ -56,14 +93,31 @@ class Tokenizer:
 # Dataset sınıfı
 # --------------------
 class StoryDataset(Dataset):
-    def __init__(self, data, tokenizer):    #veriyi ve tokenizer'ı alır
+    def __init__(self, data, tokenizer):
+        """
+        Veriyi ve tokenizer'ı alarak PyTorch Dataset'i başlatır.
+
+        Args:
+            data (list[dict]): Her biri 'prompt' ve 'story' anahtarı içeren sözlük listesi.
+            tokenizer (Tokenizer): Metinleri token ID'lerine dönüştüren tokenizer nesnesi.
+        """
         self.tokenizer = tokenizer
         self.data = data
 
-    def __len__(self):                      #örnek sayısını döndürür
+    def __len__(self):
+        """Veri kümesindeki örnek sayısını döndürür."""
         return len(self.data)
 
-    def __getitem__(self, idx):             #prompt ve story'yi token ID dizilerine dönüştürerek döndürür
+    def __getitem__(self, idx):
+        """
+        Verilen indeksteki prompt ve hikayeyi token ID tensörlerine dönüştürerek döndürür.
+
+        Args:
+            idx (int): Veri kümesindeki örnek indeksi.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: (giriş token tensörü, hedef token tensörü).
+        """
         prompt = self.data[idx]['prompt']
         story = self.data[idx]['story']
 
@@ -72,8 +126,12 @@ class StoryDataset(Dataset):
 
         return torch.tensor(input_seq), torch.tensor(target_seq)
 
-def collate_fn(batch):              #DataLoader için özel bir collate_fn'dir. Farklı uzunluktaki input ve target dizilerini
-                                    #aynı batch içinde işleyebilmek için padding (doldurma) yapar.
+def collate_fn(batch):
+    """
+    DataLoader için özel harmanlama fonksiyonu.
+    Farklı uzunluktaki giriş ve hedef dizilerini aynı batch içinde
+    işleyebilmek için PAD token'ı ile doldurur.
+    """
 
     inputs, targets = zip(*batch)
     inputs_lens = [len(seq) for seq in inputs]
@@ -94,7 +152,8 @@ def collate_fn(batch):              #DataLoader için özel bir collate_fn'dir. 
 # --------------------
 # Model mimarisi
 # --------------------
-class Encoder(nn.Module):       #Giriş metnini sabit boyutlu bir bağlam vektörüne (gizli durum ve hücre durumu) kodlar.
+class Encoder(nn.Module):
+    """Giriş metnini sabit boyutlu bir bağlam vektörüne (gizli durum + hücre durumu) kodlar."""
 
     def __init__(self, vocab_size, embedding_dim, hidden_dim):
         super().__init__()
@@ -107,7 +166,8 @@ class Encoder(nn.Module):       #Giriş metnini sabit boyutlu bir bağlam vektö
         outputs, (hidden, cell) = self.lstm(packed)
         return hidden, cell
 
-class Decoder(nn.Module):      #Encoder'dan gelen bağlam vektörünü kullanarak çıktı dizisini (hikayeyi) adım adım oluşturur.
+class Decoder(nn.Module):
+    """Encoder'dan gelen bağlam vektörünü kullanarak çıktı dizisini (hikayeyi) adım adım oluşturur."""
 
     def __init__(self, vocab_size, embedding_dim, hidden_dim):
         super().__init__()
@@ -122,7 +182,8 @@ class Decoder(nn.Module):      #Encoder'dan gelen bağlam vektörünü kullanara
         prediction = self.fc(output.squeeze(1))
         return prediction, hidden, cell
 
-class Seq2Seq(nn.Module):        #Encoder ve Decoder'ı birleştirir.
+class Seq2Seq(nn.Module):
+    """Encoder ve Decoder'ı tek bir modelde birleştirir; teacher forcing destekler."""
 
     def __init__(self, encoder, decoder, device):
         super().__init__()
@@ -130,7 +191,11 @@ class Seq2Seq(nn.Module):        #Encoder ve Decoder'ı birleştirir.
         self.decoder = decoder
         self.device = device
 
-    def forward(self, src, src_lengths, trg, teacher_forcing_ratio=0.5):    #teacher forcing (öğretmen zorlaması)
+    def forward(self, src, src_lengths, trg, teacher_forcing_ratio=0.5):
+        """
+        İleri geçiş: encoder çıktısından başlayarak hedef diziyi üretir.
+        teacher_forcing_ratio: her adımda gerçek hedef token'ı kullanma olasılığı.
+        """
         batch_size = src.size(0)
         max_len = trg.size(1)
         vocab_size = self.decoder.embedding.num_embeddings
@@ -138,7 +203,7 @@ class Seq2Seq(nn.Module):        #Encoder ve Decoder'ı birleştirir.
         outputs = torch.zeros(batch_size, max_len, vocab_size).to(self.device)
         hidden, cell = self.encoder(src, src_lengths)
 
-        input_token = trg[:,0]  # genelde <SOS>
+        input_token = trg[:,0]  # İlk token genellikle <SOS>
 
         for t in range(1, max_len):
             output, hidden, cell = self.decoder(input_token, hidden, cell)
@@ -151,7 +216,11 @@ class Seq2Seq(nn.Module):        #Encoder ve Decoder'ı birleştirir.
 # --------------------
 # Eğitim fonksiyonu
 # --------------------
-def train(model, dataloader, optimizer, criterion, epoch):      #eğitim train kodu
+def train(model, dataloader, optimizer, criterion, epoch):
+    """
+    Modeli bir epoch boyunca eğitir.
+    Her batch sonrasında kayıp, gradyan normu ve öğrenme oranını loglar.
+    """
     print(f"Using device: {DEVICE}, CUDA Available: {torch.cuda.is_available()}")
     model.train()
     epoch_loss = 0
@@ -167,7 +236,7 @@ def train(model, dataloader, optimizer, criterion, epoch):      #eğitim train k
         loss = criterion(output, trg)
         loss.backward()
 
-        # Gradient norm hesapla
+        # Gradyan normunu hesapla ve logla
         total_norm = 0
         for p in model.parameters():
             if p.grad is not None:
@@ -178,10 +247,10 @@ def train(model, dataloader, optimizer, criterion, epoch):      #eğitim train k
         optimizer.step()
         epoch_loss += loss.item()
 
-        # Learning rate al (Adam için ilk param grubundan)
+        # Adam optimizörünün ilk parametre grubundan anlık öğrenme oranını al
         lr = optimizer.param_groups[0]['lr']
 
-        # İstersen her batch sonunda yazdır
+        # Her 20 batch'te bir eğitim istatistiklerini yazdır
         if i % 20 == 0:
             print({
                 'loss': loss.item(),
@@ -196,7 +265,11 @@ def train(model, dataloader, optimizer, criterion, epoch):      #eğitim train k
 # --------------------
 # Metin üretme (inference) fonksiyonu
 # --------------------
-def generate(model, tokenizer, prompt, max_len=MAX_LEN):    #Modeli değerlendirme moduna alır 
+def generate(model, tokenizer, prompt, max_len=MAX_LEN):
+    """
+    Eğitilmiş modeli kullanarak verilen prompt'a karşılık bir hikaye üretir.
+    Model değerlendirme moduna alınır; gradyan hesaplanmaz.
+    """
     model.eval()
     with torch.no_grad():
         input_seq = tokenizer.text_to_seq(prompt)
@@ -222,15 +295,20 @@ def generate(model, tokenizer, prompt, max_len=MAX_LEN):    #Modeli değerlendir
 # --------------------
 # Ana program
 # --------------------
-def main():                     #Tokenizer'ı başlatır ve prompt'lar ile hikayeler üzerinde kelime hazinesini oluşturur
-    # Veri yükleme
+def main():
+    """
+    Ana eğitim döngüsü:
+    Veriyi yükler, tokenizer'ı oluşturur, modeli eğitir,
+    ağırlıkları kaydeder ve örnek bir metin üretimi yapar.
+    """
+    # ── Veri yükleme ──────────────────────────────────────────────────────────
     with open("dataset.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
     prompts = [item['prompt'] for item in data]
     stories = [item['story'] for item in data]
 
-    # Tokenizer oluştur ve fit et
+    # ── Tokenizer'ı oluştur ve tüm metinlere fit et ───────────────────────────
     tokenizer = Tokenizer()
     tokenizer.fit_on_texts(prompts + stories)
 
@@ -243,23 +321,23 @@ def main():                     #Tokenizer'ı başlatır ve prompt'lar ile hikay
 
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_token)
-    scheduler = StepLR(optimizer, step_size=3, gamma=0.5)  # Her 3 epoch'ta lr yarıya iner
+    scheduler = StepLR(optimizer, step_size=3, gamma=0.5)  # Her 3 epoch'ta öğrenme oranını yarıya indir
 
-    # Model eğitim döngüsü
+    # ── Eğitim döngüsü ────────────────────────────────────────────────────────
     for epoch in range(NUM_EPOCHS):
         loss = train(model, dataloader, optimizer, criterion, epoch)
         print(f"Epoch {epoch+1}/{NUM_EPOCHS}, Avg Loss: {loss:.4f}")
-        scheduler.step()  # Epoch sonunda lr güncelle
+        scheduler.step()  # Epoch sonunda öğrenme oranını güncelle
         print(f"Updated learning rate: {optimizer.param_groups[0]['lr']}")
 
-    # Eğitim sonrası modeli kaydet
+    # ── Eğitim sonrası modeli kaydet ──────────────────────────────────────────
     torch.save({
         'model_state_dict': model.state_dict(),
         'tokenizer': tokenizer
     }, "seq2seq_model.pth")
     print("Model kaydedildi: seq2seq_model.pth")
 
-    # Örnek metin üretimi (inference)
+    # ── Örnek metin üretimi (inference) ───────────────────────────────────────
     test_prompt = "Story about a lonely mountain climber"
     generated_story = generate(model, tokenizer, test_prompt)
     print("\nPrompt:", test_prompt)
