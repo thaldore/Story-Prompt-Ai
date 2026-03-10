@@ -1,6 +1,20 @@
+"""
+Story Prompt AI — Çoklu Model Hikaye Üretici
+=============================================
+Tek bir metin girdisinden GPT-2, Gemini ve Seq2Seq (LSTM) modellerini
+eş zamanlı olarak kullanarak yaratıcı hikayeler üreten Streamlit uygulaması.
+
+Kullanım:
+    streamlit run app.py
+
+Gereksinimler:
+    - Gemini için geçerli bir API anahtarı (app.py içindeki `genai.configure` satırına ekleyin)
+    - Eğitilmiş model dosyaları: ./model/ ve seq2seq_model.pth
+"""
+
 import streamlit as st
 
-st.set_page_config(layout="wide")  # Geniş ekran modu
+st.set_page_config(layout="wide")  # Geniş ekran modunda aç
 
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import torch
@@ -10,18 +24,18 @@ import os
 import random
 from train_seq2seq import Tokenizer, Encoder, Decoder, Seq2Seq, generate, DEVICE, EMBEDDING_DIM, HIDDEN_DIM
 
-# Örnek prompt'lar
+# Kullanıcıya sunulan hazır örnek prompt'lar
 EXAMPLE_PROMPTS = [
     "Story about a sentient ancient monument that slowly awakens",
     "Story about an AI",
     "Story about a magical library that changes its contents."
 ]
 
-# Model ve tokenizer'ı yükle
+# Tüm modelleri tek seferinde yükler ve önbelleğe alır
 @st.cache_resource(show_spinner="Modeller yükleniyor...")
 def load_models():
     try:
-        # GPT-2 Modeli
+        # GPT-2 — fine-tune edilmiş yerel model
         gpt_model_dir = os.path.abspath("./model")
         if not os.path.exists(gpt_model_dir):
             raise FileNotFoundError(f"GPT-2 model dizini bulunamadı: {gpt_model_dir}")
@@ -30,11 +44,11 @@ def load_models():
         gpt_model = GPT2LMHeadModel.from_pretrained(gpt_model_dir, local_files_only=True)
         gpt_model.eval()
         
-        # Gemini Modeli
-        genai.configure(api_key="Gemini_Api_Key")  # gemini api key
+        # Gemini — Google'ın bulut tabanlı üretken yapay zeka modeli
+        genai.configure(api_key="Gemini_Api_Key")  # Kendi API anahtarınızla değiştirin
         gemini_model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Seq2Seq Modeli
+        # Seq2Seq — özel eğitilmiş LSTM encoder-decoder modeli
         seq2seq_checkpoint = torch.load("seq2seq_model.pth", map_location=DEVICE)
         seq2seq_tokenizer = seq2seq_checkpoint["tokenizer"]
 
@@ -53,22 +67,24 @@ def load_models():
         st.error(f"Modeller yüklenirken hata oluştu: {str(e)}")
         return None
 
-# Modelleri yükle
+# Modelleri uygulama başlangıcında yükle
 models = load_models()
 
+# ──────────────────────────────────────────────
 # Uygulama arayüzü
+# ──────────────────────────────────────────────
 st.title("📖 Çoklu Model Hikaye Üretici")
 st.markdown("**Tek bir prompt ile üç farklı modelden hikaye üretin**")
 
-# İki sütunlu layout
+# İki sütunlu düzen: sol taraf giriş alanı, sağ taraf hazır örnekler
 col_input, col_examples = st.columns([3, 1])
 
-# Session state'de prompt yoksa rastgele bir örnek seç
+# Session state'de prompt yoksa listeden rastgele bir tane seç
 if 'current_prompt' not in st.session_state:
     st.session_state.current_prompt = random.choice(EXAMPLE_PROMPTS)
 
 with col_input:
-    # Kullanıcıdan Türkçe prompt al
+    # Kullanıcıdan hikaye başlangıcı olarak bir metin al (Türkçe veya İngilizce)
     turkish_prompt = st.text_area(
         "Hikaye için bir başlangıç yazın:",
         value=st.session_state.current_prompt,
@@ -90,7 +106,7 @@ with col_examples:
         st.session_state.current_prompt = selected_example
         st.rerun()
 
-# Ayarlar
+# Ayarlar — üç sütunda GPT-2 uzunluğu, çeviri seçeneği ve model seçimi
 col1, col2, col3 = st.columns(3)
 with col1:
     max_length = st.slider(
@@ -113,7 +129,7 @@ with col3:
         default=["GPT-2", "Gemini", "Seq2Seq"]
     )
 
-# Session state ile çıktıları ve dil seçimlerini sakla
+# Session state: üretilen çıktıları (TR/EN) ve aktif dil seçimlerini sakla
 if 'outputs' not in st.session_state:
     st.session_state.outputs = {
         'gpt': {'tr': None, 'en': None},
@@ -133,7 +149,7 @@ def generate_stories():
         st.warning("Lütfen bir hikaye başlangıcı yazın!")
         return
     
-    # Çeviri işlemi
+    # Çeviri etkinse prompt'u İngilizce'ye çevir; değilse olduğu gibi kullan
     if translate:
         with st.spinner("Prompt İngilizce'ye çevriliyor..."):
             try:
@@ -144,7 +160,7 @@ def generate_stories():
     else:
         en_prompt = turkish_prompt
 
-    # GPT-2 Hikayesi
+    # ── GPT-2 hikayesi ──────────────────────────────────────────────────────
     if "GPT-2" in selected_models:
         with st.spinner("GPT-2 hikaye oluşturuyor..."):
             try:
@@ -178,7 +194,7 @@ def generate_stories():
             except Exception as e:
                 st.error(f"GPT-2 hatası: {str(e)}")
 
-    # Gemini Hikayesi
+    # ── Gemini hikayesi ─────────────────────────────────────────────────────
     if "Gemini" in selected_models:
         with st.spinner("Gemini hikaye oluşturuyor..."):
             try:
@@ -203,7 +219,7 @@ def generate_stories():
             except Exception as e:
                 st.error(f"Gemini hatası: {str(e)}")
 
-    # Seq2Seq Hikayesi
+    # ── Seq2Seq hikayesi ────────────────────────────────────────────────────
     if "Seq2Seq" in selected_models:
         with st.spinner("Seq2Seq hikaye oluşturuyor..."):
             try:
@@ -227,7 +243,9 @@ def generate_stories():
 if st.button("Hikayeleri Oluştur", type="primary"):
     generate_stories()
 
-# Hikayeleri göster
+# ──────────────────────────────────────────────
+# Hikaye çıktılarını üç sütunda göster
+# ──────────────────────────────────────────────
 if "GPT-2" in selected_models and st.session_state.outputs['gpt']['tr'] is not None:
     col_gpt, col_gemini, col_seq2seq = st.columns(3)
     
@@ -235,7 +253,7 @@ if "GPT-2" in selected_models and st.session_state.outputs['gpt']['tr'] is not N
         with st.container(border=True, height=500):
             st.subheader("GPT-2 Hikayesi")
             
-            # Dil seçimi
+            # Türkçe / İngilizce dil seçimi
             gpt_lang = st.radio(
                 "Dil Seçimi",
                 ["Türkçe", "İngilizce"],
@@ -247,20 +265,20 @@ if "GPT-2" in selected_models and st.session_state.outputs['gpt']['tr'] is not N
             
             st.session_state.current_lang['gpt'] = 'tr' if gpt_lang == "Türkçe" else 'en'
             
-            # Çıktıyı göster
+            # Seçilen dile göre çıktıyı göster
             st.markdown("---")
             if st.session_state.current_lang['gpt'] == 'tr':
                 st.write(st.session_state.outputs['gpt']['tr'])
             else:
                 st.write(st.session_state.outputs['gpt']['en'])
 
-    # Gemini Hikayesi
+    # ── Gemini çıktısı ──────────────────────────────────────────────────────
     if "Gemini" in selected_models and st.session_state.outputs['gemini']['tr'] is not None:
         with col_gemini:
             with st.container(border=True, height=500):
                 st.subheader("Gemini Hikayesi")
                 
-                # Dil seçimi
+                # Türkçe / İngilizce dil seçimi
                 gemini_lang = st.radio(
                     "Dil Seçimi",
                     ["Türkçe", "İngilizce"],
@@ -272,20 +290,20 @@ if "GPT-2" in selected_models and st.session_state.outputs['gpt']['tr'] is not N
                 
                 st.session_state.current_lang['gemini'] = 'tr' if gemini_lang == "Türkçe" else 'en'
                 
-                # Çıktıyı göster
+                # Seçilen dile göre çıktıyı göster
                 st.markdown("---")
                 if st.session_state.current_lang['gemini'] == 'tr':
                     st.write(st.session_state.outputs['gemini']['tr'])
                 else:
                     st.write(st.session_state.outputs['gemini']['en'])
 
-    # Seq2Seq Hikayesi
+    # ── Seq2Seq çıktısı ─────────────────────────────────────────────────────
     if "Seq2Seq" in selected_models and st.session_state.outputs['seq2seq']['tr'] is not None:
         with col_seq2seq:
             with st.container(border=True, height=500):
                 st.subheader("Seq2Seq Hikayesi")
                 
-                # Dil seçimi
+                # Türkçe / İngilizce dil seçimi
                 seq2seq_lang = st.radio(
                     "Dil Seçimi",
                     ["Türkçe", "İngilizce"],
@@ -297,14 +315,16 @@ if "GPT-2" in selected_models and st.session_state.outputs['gpt']['tr'] is not N
                 
                 st.session_state.current_lang['seq2seq'] = 'tr' if seq2seq_lang == "Türkçe" else 'en'
                 
-                # Çıktıyı göster
+                # Seçilen dile göre çıktıyı göster
                 st.markdown("---")
                 if st.session_state.current_lang['seq2seq'] == 'tr':
                     st.write(st.session_state.outputs['seq2seq']['tr'])
                 else:
                     st.write(st.session_state.outputs['seq2seq']['en'])
 
-# Yan bilgi paneli
+# ──────────────────────────────────────────────
+# Yan bilgi paneli (kenar çubuğu)
+# ──────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Model Bilgileri")
     
